@@ -1,17 +1,39 @@
 # Environment variables
 .env
 
-# Output files
-output/
-
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.py[cod]
+*$py.class
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+.mypy_cache/
 
 # Virtual environments
-.venv
-.python-version
+.venv/
+.tox/
+.uv/
+
+# Output & Artifacts
+output/
+artifacts/
+!artifacts/README.md
+
+# Test coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# OS generated files
+.DS_Store
+.DS_Store?
+
+# IDEs
+.vscode/
+.idea/
+
+# Project related files
+*.log
