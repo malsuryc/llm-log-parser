@@ -129,6 +129,43 @@ def extract_and_parse_yaml(ai_response):
         return {"raw_response": content}
 
 
+def group_similar_issues(parsed_yaml):
+    """
+    Groups similar issues across different nodes.
+    Returns a new structure with deduplicated issues and lists of affected nodes.
+    """
+    if not parsed_yaml or "issues" not in parsed_yaml or not parsed_yaml["issues"]:
+        return parsed_yaml
+        
+    grouped_issues = {}
+    
+    for issue in parsed_yaml["issues"]:
+        # Create a key based on similarity criteria
+        # Here we use category + summary as the grouping key
+        key = f"{issue.get('category', 'unknown')}::{issue.get('summary', 'unknown')}"
+        
+        if key not in grouped_issues:
+            # Create a new group with this issue as template
+            grouped_issues[key] = {
+                "severity": issue.get("severity", "N/A"),
+                "category": issue.get("category", "N/A"),
+                "summary": issue.get("summary", "N/A"),
+                "analysis": issue.get("analysis", ""),
+                "recommended_action": issue.get("recommended_action", ""),
+                "affected_nodes": [],
+                "sample_log_entries": issue.get("log_entries", "")
+            }
+            
+        # Add this node to the affected nodes list
+        node_name = issue.get("node_name", "Unknown")
+        if node_name not in grouped_issues[key]["affected_nodes"]:
+            grouped_issues[key]["affected_nodes"].append(node_name)
+    
+    # Convert back to list format
+    result = {"grouped_issues": list(grouped_issues.values())}
+    return result
+
+
 def format_analysis_output(parsed_yaml):
     """Format the parsed YAML analysis into a readable output."""
     if not parsed_yaml:
@@ -138,22 +175,36 @@ def format_analysis_output(parsed_yaml):
         return f"Raw AI Response (YAML parsing failed):\n{parsed_yaml['raw_response']}"
 
     output = []
+    
+    # Group similar issues first
+    grouped_data = group_similar_issues(parsed_yaml)
 
-    # Issues section
+    # Issues section (original format)
     if "issues" in parsed_yaml and parsed_yaml["issues"]:
-        output.append("🚨 DETECTED ISSUES BY NODE")
+        output.append("🚨 DETECTED ISSUES BY NODE (ORIGINAL FORMAT)")
         output.append("=" * 60)
 
         for i, issue in enumerate(parsed_yaml["issues"], 1):
             output.append(f"\n[{i}] Node: {issue.get('node_name', 'Unknown')}")
+            # ...existing code...
+            
+    # Grouped issues section (new format)
+    if "grouped_issues" in grouped_data and grouped_data["grouped_issues"]:
+        output.append("\n\n🔍 DEDUPLICATED ISSUES")
+        output.append("=" * 60)
+
+        for i, issue in enumerate(grouped_data["grouped_issues"], 1):
+            output.append(f"\n[{i}] {issue.get('summary', 'Unknown issue')}")
             output.append(f"    Severity: {issue.get('severity', 'N/A')}")
             output.append(f"    Category: {issue.get('category', 'N/A')}")
-            output.append(f"    Summary: {issue.get('summary', 'N/A')}")
-
-            if issue.get("log_entries"):
-                output.append("    Log Entries:")
-                for line in issue["log_entries"].strip().split("\n"):
+            output.append(f"    Affected Nodes ({len(issue.get('affected_nodes', []))}): {', '.join(issue.get('affected_nodes', ['Unknown']))}")
+            
+            if issue.get("sample_log_entries"):
+                output.append("    Sample Log Entries:")
+                for line in issue["sample_log_entries"].strip().split("\n")[:5]:  # Limit to 5 lines as sample
                     output.append(f"      {line}")
+                if len(issue["sample_log_entries"].strip().split("\n")) > 5:
+                    output.append("      ...")
 
             if issue.get("analysis"):
                 output.append(f"    Analysis: {issue['analysis']}")
@@ -236,22 +287,29 @@ def main():
         # Parse the YAML response
         parsed_analysis = extract_and_parse_yaml(ai_response)
 
+        # In main(), replace the existing output saving with:
         if parsed_analysis:
             # Format and display the structured analysis
             formatted_output = format_analysis_output(parsed_analysis)
-
+            
             print("\n" + "=" * 70)
             print("📊 CLUSTER LOG ANALYSIS - ISSUES BY NODE")
             print("=" * 70)
             print(formatted_output)
             print("=" * 70)
-
+            
             # Save to file with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_file = f"output/cluster_issues_{timestamp}.yaml"
+            grouped_analysis = group_similar_issues(parsed_analysis)
+            
             try:
+                # Save both formats
                 with open(output_file, "w") as f:
-                    yaml.dump(parsed_analysis, f, default_flow_style=False, indent=2)
+                    yaml.dump({
+                        "original": parsed_analysis,
+                        "grouped": grouped_analysis
+                    }, f, default_flow_style=False, indent=2)
                 print(f"\n💾 Issues analysis saved to: {output_file}")
             except Exception as e:
                 print(f"Warning: Could not save analysis to file: {e}")
