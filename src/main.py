@@ -1,5 +1,6 @@
 import os
 import subprocess
+import yaml
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ def get_log_content(log_file_path, lines=100):
     """Read the last N lines from a log file using tail command."""
     try:
         result = subprocess.run(
-            ["tail", "-n", str(lines), log_file_path],
+            ["bash", "-c", f"cat {log_file_path} | grep -v wwclient | tail -n {lines}"],
             capture_output=True,
             text=True,
             check=True,
@@ -25,24 +26,46 @@ def get_log_content(log_file_path, lines=100):
 
 
 def analyze_logs_with_ai(client, log_content):
-    """Send log content to AI for anomaly detection."""
-    prompt = """You are a system engineer analyzing server logs for anomalies. 
-Please analyze the following log entries and identify any potential issues, errors, or anomalies.
+    """Send log content to AI for structured anomaly detection."""
+    prompt = """You are a system engineer analyzing cluster logs aggregated from multiple nodes using 'journalctl -xef' via pdsh.
+
+Please analyze the log entries and identify issues on each node. Provide a YAML response with ONLY the issues section:
+
+```yaml
+issues:
+  - node_name: "node001"
+    severity: "CRITICAL|HIGH|MEDIUM|LOW"
+    category: "system|security|performance|network|storage|user"
+    summary: "Brief description of the issue"
+    log_entries: |
+      Multi-line log entries relevant to this issue
+      Include timestamps and full context
+    analysis: "Detailed explanation of what this means and potential impact"
+    recommended_action: "Specific steps to resolve or investigate further"
+  
+  - node_name: "node002"
+    severity: "HIGH"
+    category: "performance"
+    summary: "Another issue description"
+    log_entries: |
+      Related log entries here
+    analysis: "Analysis of this issue"
+    recommended_action: "What to do about it"
+```
+
 Focus on:
-1. Error messages or exceptions
-2. Unusual patterns in timestamps or frequencies
-3. Security-related events
-4. Performance issues
-5. System warnings
+1. Parse node names from log prefixes (typically in format like "node001:" or similar)
+2. Group related errors by node
+3. Identify severity levels (CRITICAL for system failures, HIGH for service issues, etc.)
+4. Categorize issues (system, security, performance, network, storage, user)
+5. Only include actual issues/errors/warnings - ignore normal operational logs
 
-Please highlight any concerning entries and explain why they might be problematic.
-
-Log entries:
+Log entries to analyze:
 ```
 {log_content}
 ```
 
-Please provide your analysis in a clear, structured format."""
+Respond ONLY with the YAML structure showing the issues array, no additional text."""
 
     try:
         response = client.chat.completions.create(
@@ -50,8 +73,8 @@ Please provide your analysis in a clear, structured format."""
             messages=[
                 {"role": "user", "content": prompt.format(log_content=log_content)}
             ],
-            max_tokens=1000,
-            temperature=0.1,  # Lower temperature for more focused analysis
+            max_tokens=4096,
+            temperature=0.1,
         )
 
         return response.choices[0].message.content
@@ -60,18 +83,89 @@ Please provide your analysis in a clear, structured format."""
         return None
 
 
-def extract_response_content(ai_response):
-    """Extract the actual response content, handling <think> tags."""
+def extract_and_parse_yaml(ai_response):
+    """Extract YAML content from AI response and parse it."""
     if not ai_response:
         return None
 
-    # Look for content after </think> tag if it exists
-    if "</think>" in ai_response:
-        parts = ai_response.split("</think>", 1)
+    # Remove <think> tags if present
+    content = ai_response
+    if "</think>" in content:
+        parts = content.split("</think>", 1)
         if len(parts) > 1:
-            return parts[1].strip()
+            content = parts[1].strip()
 
-    return ai_response
+    # Extract YAML from code blocks if present
+    if "```yaml" in content:
+        yaml_start = content.find("```yaml") + 7
+        yaml_end = content.find("```", yaml_start)
+        if yaml_end != -1:
+            content = content[yaml_start:yaml_end].strip()
+    elif "```" in content:
+        # Handle generic code blocks
+        lines = content.split("\n")
+        in_code_block = False
+        yaml_lines = []
+
+        for line in lines:
+            if line.strip() == "```" and not in_code_block:
+                in_code_block = True
+                continue
+            elif line.strip() == "```" and in_code_block:
+                break
+            elif in_code_block:
+                yaml_lines.append(line)
+
+        if yaml_lines:
+            content = "\n".join(yaml_lines)
+
+    try:
+        parsed_yaml = yaml.safe_load(content)
+        print(f"✓ Successfully parsed YAML structure")
+        return parsed_yaml
+    except yaml.YAMLError as e:
+        print(f"✗ Error parsing YAML: {e}")
+        print(f"Raw content that failed to parse:\n{content[:500]}...")
+        return {"raw_response": content}
+
+
+def format_analysis_output(parsed_yaml):
+    """Format the parsed YAML analysis into a readable output."""
+    if not parsed_yaml:
+        return "No analysis data available"
+
+    if "raw_response" in parsed_yaml:
+        return f"Raw AI Response (YAML parsing failed):\n{parsed_yaml['raw_response']}"
+
+    output = []
+
+    # Issues section
+    if "issues" in parsed_yaml and parsed_yaml["issues"]:
+        output.append("🚨 DETECTED ISSUES BY NODE")
+        output.append("=" * 60)
+
+        for i, issue in enumerate(parsed_yaml["issues"], 1):
+            output.append(f"\n[{i}] Node: {issue.get('node_name', 'Unknown')}")
+            output.append(f"    Severity: {issue.get('severity', 'N/A')}")
+            output.append(f"    Category: {issue.get('category', 'N/A')}")
+            output.append(f"    Summary: {issue.get('summary', 'N/A')}")
+
+            if issue.get("log_entries"):
+                output.append("    Log Entries:")
+                for line in issue["log_entries"].strip().split("\n"):
+                    output.append(f"      {line}")
+
+            if issue.get("analysis"):
+                output.append(f"    Analysis: {issue['analysis']}")
+
+            if issue.get("recommended_action"):
+                output.append(f"    Action: {issue['recommended_action']}")
+
+            output.append("-" * 60)
+    else:
+        output.append("✅ No issues detected in the log entries")
+
+    return "\n".join(output)
 
 
 def main():
@@ -113,7 +207,7 @@ def main():
             messages=[
                 {"role": "user", "content": "Hello, are you ready to analyze logs?"}
             ],
-            max_tokens=2048,
+            max_tokens=50,
         )
         print("✓ API connection successful")
     except Exception as e:
@@ -131,24 +225,38 @@ def main():
     if not log_content.strip():
         print("Log file appears to be empty")
         return
-
+    print(log_content)
     print(f"✓ Successfully read {len(log_content.splitlines())} lines")
 
     # Analyze logs with AI
-    print("\n🤖 Analyzing logs for anomalies...")
+    print("\n🤖 Analyzing cluster logs for issues...")
     ai_response = analyze_logs_with_ai(client, log_content)
 
     if ai_response:
-        # Extract content after <think> tags if present
-        clean_response = extract_response_content(ai_response)
+        # Parse the YAML response
+        parsed_analysis = extract_and_parse_yaml(ai_response)
 
-        print("\n" + "=" * 60)
-        print("📊 LOG ANALYSIS RESULTS")
-        print("=" * 60)
-        print(f"Analysis completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("-" * 60)
-        print(clean_response)
-        print("=" * 60)
+        if parsed_analysis:
+            # Format and display the structured analysis
+            formatted_output = format_analysis_output(parsed_analysis)
+
+            print("\n" + "=" * 70)
+            print("📊 CLUSTER LOG ANALYSIS - ISSUES BY NODE")
+            print("=" * 70)
+            print(formatted_output)
+            print("=" * 70)
+
+            # Save to file with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"output/cluster_issues_{timestamp}.yaml"
+            try:
+                with open(output_file, "w") as f:
+                    yaml.dump(parsed_analysis, f, default_flow_style=False, indent=2)
+                print(f"\n💾 Issues analysis saved to: {output_file}")
+            except Exception as e:
+                print(f"Warning: Could not save analysis to file: {e}")
+        else:
+            print("Failed to parse structured analysis")
     else:
         print("Failed to get analysis from AI")
 
