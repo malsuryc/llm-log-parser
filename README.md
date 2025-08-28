@@ -1,139 +1,155 @@
-# LLM Log Parser
+# LLM Log Parser & Incident Tagger
 
-A Python application that uses AI to analyze log files and detect anomalies using a sliding window approach for continuous analysis.
+Two small AI-powered tools in one repo:
+- Sliding Window Log Analyzer for cluster/system logs
+- Incident Tagger that labels ServiceNow incidents by category
 
-## Features
+## Quick Start
 
-- **Sliding Window Analysis**: Continuously analyzes log files using overlapping windows
-- **Deduplication**: Automatically merges and deduplicates similar issues across windows
-- **Configurable Parameters**: Customizable window size, step size, and processing limits
-- **Comprehensive Output**: Detailed analysis with window-by-window summaries and final deduplicated results
+1) Prepare environment variables (OpenAI-compatible endpoint):
 
-## Setup
+```bash
+cp .env.example .env
+# Edit .env and set at least:
+# OPENAI_API_URL=http://<your-openai-compatible-endpoint>/v1
+# OPENAI_API_KEY=your-api-key-or-dummy
+```
 
-1. Activate your virtual environment:
-   ```bash
-   . .venv/bin/activate
-   ```
+2) Run either tool:
 
-2. Configure your `.env` file:
-   ```
-   # API Configuration
-   OPENAI_API_URL=http://10.12.40.145:23334/v1
-   OPENAI_API_KEY=your-api-key-here
-   LOG_FILE_PATH=/path/to/your/logfile
-   
-   # Sliding Window Configuration (Optional)
-   WINDOW_SIZE=100          # Number of lines per window (default: 100)
-   STEP_SIZE=90             # Step size between windows (default: 90, 10-line overlap)
-   MAX_WINDOWS=             # Maximum windows to process (empty = no limit)
-   DELAY_SECONDS=2          # Delay between API calls (default: 2 seconds)
-   ```
-
-3. Make sure the log file exists and is readable.
-
-## Usage
-
-Run the log analyzer:
+- Log analysis (sliding window):
 ```bash
 python src/main.py
 ```
 
-### How Sliding Window Analysis Works
-
-The program processes your log file using a sliding window approach:
-
-1. **Window 1**: Lines 1-100
-2. **Window 2**: Lines 91-190 (10-line overlap with previous window)
-3. **Window 3**: Lines 181-280 (10-line overlap with previous window)
-4. And so on...
-
-This approach provides:
-- **Continuity**: Overlapping windows ensure no issues are missed at window boundaries
-- **Context**: Each analysis includes sufficient context around potential issues
-- **Efficiency**: Configurable parameters allow balancing thoroughness with API costs
-
-The program will:
-1. Test the API connection
-2. Determine the total number of lines in your log file
-3. Process the log file using sliding windows with the configured parameters
-4. Send each window's content to the AI model for analysis
-5. Merge and deduplicate results from all windows
-6. Display comprehensive analysis results
-7. Save detailed results to timestamped YAML files
-
-## Output
-
-The program generates two types of output files:
-
-1. **Comprehensive Analysis** (`sliding_window_analysis_TIMESTAMP.yaml`):
-   - Complete window-by-window results
-   - Merged and deduplicated issues
-   - Analysis metadata and configuration
-
-2. **Summary** (`summary_TIMESTAMP.yaml`):
-   - Analysis summary statistics
-   - Final unique issues only
-
-## Configuration Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `WINDOW_SIZE` | 100 | Number of lines in each analysis window |
-| `STEP_SIZE` | 90 | Lines to advance between windows (smaller = more overlap) |
-| `MAX_WINDOWS` | None | Maximum windows to process (useful for testing) |
-| `DELAY_SECONDS` | 2 | Seconds to wait between API calls (rate limiting) |
-
-### Example Configurations
-
-**High Overlap (thorough analysis)**:
-```
-WINDOW_SIZE=100
-STEP_SIZE=80    # 20-line overlap
+- Incident tagging (reads formatted-incidents.json, writes enriched-incidents.json):
+```bash
+python src/tag_incidents.py --model "gpt-oss 120b"
 ```
 
-**Low Overlap (faster processing)**:
-```
-WINDOW_SIZE=100
-STEP_SIZE=95    # 5-line overlap
+---
+
+## Incident Tagger (ServiceNow) 🏷️
+
+Script: `src/tag_incidents.py`
+
+Purpose: Tag each incident (from `formatted-incidents.json`) with one category and write results to `enriched-incidents.json`.
+
+### Categories
+
+- infrastructure: some incident with our infrastructure, or suspected so
+- account: request for approving account, create account
+- operation: adding members, transferring data, increase storage etc
+- billing: anything related to $
+- internal: <reserved>
+- node-contrib: user want to buy their own node
+- advanced: support case requiring significant efforts to support, e.g. installing software
+
+If nothing matches, the tag is left empty.
+
+### Input and Output
+
+- Input: `formatted-incidents.json` with an `incidents` array (each item may contain fields like `number`, `short_description`, `description`, `caller`, `department`, `state`).
+- Output: `enriched-incidents.json` (same structure) with extra fields per incident:
+   - `ai_tag`: one of the categories above or empty string
+   - `ai_confidence`: 0..1 (when provided by the model)
+   - `ai_rationale`: short reason (when provided)
+
+Example output snippet:
+
+```json
+{
+   "incidents": [
+      {
+         "number": "INC0201963",
+         "short_description": "[HPC4] Rebooting of computing node - ocean3",
+         "ai_tag": "infrastructure",
+         "ai_confidence": 0.92,
+         "ai_rationale": "Node reboot and site-wide issue suggests infra"
+      }
+   ]
+}
 ```
 
-**Testing Configuration**:
-```
-WINDOW_SIZE=50
-STEP_SIZE=40
-MAX_WINDOWS=5   # Only process first 5 windows
+### Usage
+
+```bash
+python src/tag_incidents.py \
+   --input formatted-incidents.json \
+   --output enriched-incidents.json \
+   --batch-size 20 \
+   --model "gpt-oss 120b"
 ```
 
-## Features
+Notes:
+- Uses your OpenAI-compatible endpoint from `OPENAI_API_URL` and `OPENAI_API_KEY`.
+- Default files: `--input formatted-incidents.json`, `--output enriched-incidents.json`.
+- Tags are validated to the allowed set; unknowns become empty.
+- Processes incidents in batches (default 20) to reduce prompt size.
 
-- **Sliding Window Processing**: Continuous analysis with configurable overlap
-- **AI-powered analysis**: Leverages the Qwen3-32B model for intelligent log analysis
-- **Anomaly detection**: Identifies errors, unusual patterns, security events, and performance issues
-- **Clean output**: Handles the model's `<think>` tags and provides clean analysis results
+---
+
+## Sliding Window Log Analyzer 🧪
+
+Script: `src/main.py`
+
+Purpose: Analyze large logs via overlapping windows, deduplicate issues, and group similar ones with AI.
+
+### How it works
+
+- Reads your log defined by `LOG_FILE_PATH` in `.env`.
+- Processes windows with overlap controlled by `WINDOW_SIZE` and `STEP_SIZE`.
+- Sends each window to the model (code uses `Qwen-32B`).
+- Merges and deduplicates issues across windows.
+- Optionally groups issues by similarity.
+
+### Run
+
+```bash
+python src/main.py
+```
+
+### Output
+
+Files saved under `output/` with timestamps, including:
+- `log_analysis_YYYYMMDD_HHMMSS.yaml` — full window-by-window and merged issues
+- `grouped_analysis_YYYYMMDD_HHMMSS.log` — readable grouped summary
+
+---
 
 ## Configuration
 
-### Environment Variables
+Environment variables (set in `.env`):
 
-- `OPENAI_API_URL`: Your OpenAI-compatible API endpoint
-- `OPENAI_API_KEY`: API key (can be dummy for local models)  
-- `LOG_FILE_PATH`: Path to the log file you want to analyze
+- Common
+   - `OPENAI_API_URL` — OpenAI-compatible base URL (required)
+   - `OPENAI_API_KEY` — API key (dummy is fine for local models)
 
-### Example log files to analyze
+- Log analyzer
+   - `LOG_FILE_PATH` — path to the log file to analyze
+   - `WINDOW_SIZE` — lines per window (default: 100)
+   - `STEP_SIZE` — step size between windows (default: 90)
+   - `MAX_WINDOWS` — max windows to process (empty = no limit)
+   - `DELAY_SECONDS` — delay between API calls (default: 2)
+   - `START_LINE` — first line to start from (default: 1)
 
-- `/var/log/syslog` - System logs
-- `/var/log/auth.log` - Authentication logs
-- `/var/log/nginx/access.log` - Web server logs
-- `/var/log/apache2/error.log` - Apache error logs
+Model notes:
+- Incident Tagger default model: `gpt-oss 120b` (override with `--model`).
+- Log Analyzer model: `Qwen-32B` (configured in code).
 
-## Sample Output
+---
 
-The analyzer will provide structured analysis including:
-- Error messages and exceptions
-- Unusual timestamp patterns
-- Security-related events
-- Performance issues
-- System warnings
+## Development
 
-Each analysis includes explanations of why certain entries might be problematic.
+Optional helper commands (if you use `tox`):
+
+```bash
+tox -e format      # format with black + isort
+tox -e mypy        # type-check
+tox -e lint        # lint with pylint
+tox                # run tests (if present)
+```
+
+## License
+
+MIT
