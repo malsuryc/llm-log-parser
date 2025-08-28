@@ -10,6 +10,7 @@ dependencies = [
     "requests>=2.32.4",
     "pyyaml>=6.0.0",
     "vllm>=0.9.1",
+    "openai-harmony>=0.0.4",
 ]
 license = {text = "MIT"}
 
