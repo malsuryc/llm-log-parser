@@ -1,0 +1,29 @@
+issues:
+  - node_name: "node001"
+    severity: "HIGH"
+    category: "system"
+    summary: "Disk space critically low"
+    log_entries: |
+      node001: Jul 29 10:15:32 systemd[1]: dev-disk-by\x2duuid-12345.device: Job dev-disk-by\x2duuid-12345.device/start timed out.
+      node001: Jul 29 10:15:32 systemd[1]: Timed out waiting for device dev-disk-by\x2duuid-12345.device.
+    analysis: "The system has encountered a disk issue"
+    recommended_action: "Check disk space and mount points"
+
+  - node_name: "node002"
+    severity: "HIGH"
+    category: "system"
+    summary: "Disk space critically low"
+    log_entries: |
+      node002: Jul 29 10:16:12 systemd[1]: dev-disk-by\x2duuid-67890.device: Job dev-disk-by\x2duuid-67890.device/start timed out.
+      node002: Jul 29 10:16:12 systemd[1]: Timed out waiting for device dev-disk-by\x2duuid-67890.device.
+    analysis: "The system has encountered a disk issue"
+    recommended_action: "Check disk space and mount points"
+
+  - node_name: "node003"
+    severity: "MEDIUM"
+    category: "security"
+    summary: "Failed login attempts"
+    log_entries: |
+      node003: Jul 29 10:17:22 sshd[1234]: Failed password for user from 192.168.1.100 port 43215 ssh2
+    analysis: "Multiple failed login attempts detected"
+    recommended_action: "Check for unauthorized access attempts"
